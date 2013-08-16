@@ -8,3 +8,7 @@
 
 # Ignore IDE files
 /.idea
+
+# Ignore production folders and files.
+/cgi-bin
+.ftpquota
