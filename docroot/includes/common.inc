@@ -885,18 +885,6 @@ function drupal_http_request($url, array $options = array()) {
       $port = isset($uri['port']) ? $uri['port'] : 443;
       $socket = 'ssl://' . $uri['host'] . ':' . $port;
       $options['headers']['Host'] = $uri['host'] . ($port != 443 ? ':' . $port : '');
-      // By default, verify SSL certificates in OpenSSL connections. This is
-      // enabled by default in PHP 5.6, older versions do not enable it
-      // automatically. Allow other SSL context options to be configured.
-      if (!isset($options['context'])) {
-        $opts = variable_get('drupal_ssl_context_options', array());
-        if (in_array($uri['host'], array_keys($opts))) {
-          $options['context'] = stream_context_create($opts[$uri['host']]);
-        }
-        elseif (array_key_exists('default', $opts)) {
-          $options['context'] = stream_context_create($opts['default']);
-        }
-      }
       break;
 
     default:
