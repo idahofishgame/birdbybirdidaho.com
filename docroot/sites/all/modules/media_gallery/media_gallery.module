@@ -58,45 +58,50 @@ function media_gallery_menu() {
     'page arguments' => array('gallery', 3),
     'file' => 'media_gallery.pages.inc',
   );
-  $items['media-gallery/detail/%node/%file'] = array(
+  $items['media-gallery/detail/%media_gallery_mg_node/%media_gallery_mg_item'] = array(
     'page callback' => 'media_gallery_detail_page',
     'page arguments' => array(2, 3),
     'access callback' => 'media_gallery_view_item_access',
     'access arguments' => array(2, 3),
+    'load arguments' => array(2),
     'file' => 'media_gallery.pages.inc',
   );
-  $items['media-gallery/detail/%node/%file/view'] = array(
+  $items['media-gallery/detail/%media_gallery_mg_node/%media_gallery_mg_item/view'] = array(
     'title' => 'View',
     'type' => MENU_DEFAULT_LOCAL_TASK,
     'weight' => -10,
+    'load arguments' => array(2),
   );
   // An in-gallery-context version of media/%file/edit.
-  $items['media-gallery/detail/%node/%file/edit'] = array(
-    'title' => 'Edit',
+  $items['media-gallery/detail/%media_gallery_mg_node/%media_gallery_mg_item/edit'] = array(
+    'title' => 'Edit file info',
     'page callback' => 'media_gallery_media_page_edit',
     'page arguments'  => array(2, 3),
     'access callback' => 'media_gallery_edit_item_access',
     'access arguments' => array(2, 3),
+    'load arguments' => array(2),
     'weight' => 0,
     'type' => MENU_LOCAL_TASK,
     'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
     'file' => 'media_gallery.pages.inc',
   );
-  $items['media-gallery/detail/%node/%file/remove'] = array(
-    'title' => 'Remove',
+  $items['media-gallery/detail/%media_gallery_mg_node/%media_gallery_mg_item/remove'] = array(
+    'title' => 'Remove from gallery',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('media_gallery_remove_item_form', 2, 3),
     'access callback' => 'media_gallery_remove_item_access',
     'access arguments' => array(2, 3),
+    'load arguments' => array(2),
     'type' => MENU_LOCAL_TASK,
     'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
     'file' => 'media_gallery.pages.inc',
   );
-  $items['media-gallery/lightbox/%node/%file'] = array(
+  $items['media-gallery/lightbox/%media_gallery_mg_node/%media_gallery_mg_item'] = array(
     'page callback' => 'media_gallery_lightbox_page',
     'page arguments' => array(2, 3),
     'access callback' => 'media_gallery_view_item_access',
     'access arguments' => array(2, 3),
+    'load arguments' => array(2),
     'file' => 'media_gallery.pages.inc',
     'delivery callback' => 'media_gallery_lightbox_delivery_callback',
   );
@@ -124,12 +129,54 @@ function media_gallery_menu() {
     'title' => 'Download',
     'page callback' => 'media_download',
     'page arguments'  => array(1),
-    'access callback' => 'media_access',
-    'access arguments' => array('view'),
+    'access callback' => 'file_entity_access',
+    'access arguments' => array('view', 1),
     'type' => MENU_CALLBACK,
     'file' => 'media.pages.inc',
   );
   return $items;
+}
+
+/**
+ * Load a node object from the database.
+ *
+ * @see node_load()
+ * @see media_gallery_menu()
+ *
+ * @param $nid
+ *   The node ID.
+ * @param $nid2
+ *   The same as $nid. Unused.
+ *
+ * @return
+ *   A fully-populated node object, or FALSE if the node is not found.
+ */
+function media_gallery_mg_node_load($nid, $nid2 = NULL) {
+  return node_load($nid);
+}
+/**
+ * Load a file object from the database, if it is part of the media_gallery
+ * node.
+ *
+ * @see node_load()
+ * @see file_load()
+ * @see media_gallery_menu()
+ *
+ * @param $fid
+ *   The file ID.
+ * @param $nid
+ *   The media_gallery node ID.
+ *
+ * @return
+ *   A fully-populated file object, or FALSE if the file is not part of the
+ *   media_gallery.
+ */
+function media_gallery_mg_item_load($fid, $nid) {
+  $node = node_load($nid);
+  if ($node && $node->type == 'media_gallery' && in_array($fid, media_gallery_get_file_ids($node))) {
+    return file_load($fid);
+  }
+  return FALSE;
 }
 
 /**
@@ -198,14 +245,34 @@ function media_gallery_menu_local_tasks_alter(&$data, $router_item, $root_path) 
  * Implements hook_node_load().
  */
 function media_gallery_node_load($nodes, $types) {
-  // Store a copy of the media_gallery_media field before mucking with it in
+  // Store a copy of the media_gallery_file field before mucking with it in
   // media_gallery_view(). We use hook_node_load() instead of hook_load(),
   // because the latter runs before fields are loaded.
   if (in_array('media_gallery', $types)) {
     foreach ($nodes as $node) {
       if ($node->type == 'media_gallery') {
-        $node->media_gallery_media_original = $node->media_gallery_media;
+        $node->media_gallery_file_original = $node->media_gallery_file;
       }
+    }
+  }
+}
+
+/**
+  * Implements hook_file_delete().
+  *
+  * When an image is deleted, remove it from media_gallery nodes first.
+  */
+function media_gallery_file_delete($file) {
+  $query = new EntityFieldQuery();
+  $result = $query->entityCondition('entity_type', 'node')
+    ->fieldCondition('media_gallery_file', 'fid', $file->fid, '=')
+    ->execute();
+
+  if (isset($result['node'])) {
+    $nids = array_keys($result['node']);
+    $nodes = entity_load('node', $nids);
+    foreach ($nodes as $node) {
+      media_gallery_remove_item_from_gallery($node, $file);
     }
   }
 }
@@ -228,7 +295,10 @@ function media_gallery_view($node, $view_mode) {
         'localized_options' => array(
           'query' => array('render' => 'media-popup'),
           'attributes' => array(
-            'class' => 'media-gallery-add launcher',
+            'class' => array(
+              'media-gallery-add',
+              'launcher',
+            ),
           ),
         ),
       ),
@@ -237,14 +307,19 @@ function media_gallery_view($node, $view_mode) {
       '#suffix' => '</ul>',
     );
 
+    // Prevent the overlay module to open an additional dialog.
+    if (module_exists('overlay')) {
+      $node->content['add_media_link']['#link']['localized_options']['attributes']['class'][] = 'overlay-exclude';
+    }
+
     // Enable the "Add media" link to launch the media browser.
-    module_load_include('inc', 'media', 'includes/media.browser');
-    media_attach_browser_js($node->content['add_media_link']);
+    $node->content['add_media_link']['#attached']['library'][] = array('media', 'media_browser');
+    $node->content['add_media_link']['#attached']['library'][] = array('media', 'media_browser_settings');
     $node->content['add_media_link']['#attached']['js'][] = drupal_get_path('module', 'media_gallery') . '/media_gallery.addimage.js';
 
     // These JS settings are used by the "add media" link but some are also
     // shared by the drag-and-drop code below.
-    $instance = field_info_instance('node', 'media_gallery_media', $node->type);
+    $instance = field_info_instance('node', 'media_gallery_file', $node->type);
     $token = drupal_get_token('media_gallery');
     $gallery_js_settings = array(
       'mediaGalleryAddImagesUrl' => url('media-gallery/add-images/' . $node->nid . '/' . $token),
@@ -274,26 +349,26 @@ function media_gallery_view($node, $view_mode) {
   // rest from the node's field data, so that the field formatter doesn't waste
   // time building the render structure for items that won't be shown.
   if ($view_mode == 'teaser') {
-    if (!empty($node->media_gallery_media[LANGUAGE_NONE])) {
-      if (media_access('view')) {
-        $first_item = array_shift($node->media_gallery_media[LANGUAGE_NONE]);
-        $node->media_gallery_media[LANGUAGE_NONE] = array($first_item);
+    if (!empty($node->media_gallery_file[LANGUAGE_NONE])) {
+      $first_item = array_shift($node->media_gallery_file[LANGUAGE_NONE]);
+      if (file_entity_access('view', (object)$first_item)) {
+        $node->media_gallery_file[LANGUAGE_NONE] = array($first_item);
       }
       else {
-        $node->media_gallery_media[LANGUAGE_NONE] = array();
+        $node->media_gallery_file[LANGUAGE_NONE] = array();
       }
     }
   }
   // For the full display, implement pagination.
   elseif ($view_mode == 'full' || $view_mode == 'media_gallery_block') {
     $full = $view_mode == 'full' ? TRUE : FALSE;
-    if (!empty($node->media_gallery_media) && media_access('view')) {
-      $media = $node->media_gallery_media[LANGUAGE_NONE];
+    if (!empty($node->media_gallery_file)) {
+      $media = media_gallery_filter_media_access($node->media_gallery_file[LANGUAGE_NONE], 'view');
     }
     else {
       $media = array();
     }
-    
+
     // Only display the requested number of media items per page.
     $columns = $full ? $node->media_gallery_columns[LANGUAGE_NONE][0]['value'] : $node->media_gallery_block_columns[LANGUAGE_NONE][0]['value'];
     $rows = $full ? $node->media_gallery_rows[LANGUAGE_NONE][0]['value'] : $node->media_gallery_block_rows[LANGUAGE_NONE][0]['value'];
@@ -332,12 +407,11 @@ function media_gallery_view($node, $view_mode) {
 
     // Field rendering requires sequential deltas, so re-key.
     // @todo Open a Drupal core issue about this.
-    
     if ($media) {
-      $node->media_gallery_media[LANGUAGE_NONE] = array_values($media);
+      $node->media_gallery_file[LANGUAGE_NONE] = array_values($media);
     }
     else {
-      $node->media_gallery_media[LANGUAGE_NONE] = array();  
+      $node->media_gallery_file[LANGUAGE_NONE] = array();
     }
 
     // Create a set of dummy links to media items that don't appear on this
@@ -556,72 +630,75 @@ function media_gallery_block_view($delta = '') {
     // display a block.
     $block['subject'] = NULL;
     $block['content'] = '';
+    return $block;
   }
-  elseif (empty($node->media_gallery_media_original) || !media_access('view')) {
+
+  // Collect an array of file IDs associated with this gallery. For
+  // simplicity we will assume (here and below) that this is not a
+  // multilingual field. Also note that the node may have been loaded and
+  // viewed elsewhere on the page, in which case the 'media_gallery_file'
+  // field was modified and does not contain what we want, so we have to go
+  // back to the original field value set in hook_node_load() instead, and
+  // also clone the node before changing it so our modifications do not
+  // affect other places where it might be being viewed.
+  $node = clone $node;
+  $node->media_gallery_file = $node->media_gallery_file_original;
+  $files = &$node->media_gallery_file[LANGUAGE_NONE];
+  $files = media_gallery_filter_media_access($files, 'view');
+  if (empty($files)) {
     // Bail out now if there won't be any media items to show.
     $block['subject'] = check_plain($node->title);
     $block['content'] = t('No content available.');
+    return $block;
   }
-  else {
-    // Collect an array of file IDs associated with this gallery. For
-    // simplicity we will assume (here and below) that this is not a
-    // multilingual field. Also note that the node may have been loaded and
-    // viewed elsewhere on the page, in which case the 'media_gallery_media'
-    // field was modified and does not contain what we want, so we have to go
-    // back to the original field value set in hook_node_load() instead, and
-    // also clone the node before changing it so our modifications do not
-    // affect other places where it might be being viewed.
-    $node = clone $node;
-    $node->media_gallery_media = $node->media_gallery_media_original;
-    $files = &$node->media_gallery_media[LANGUAGE_NONE];
-    $gallery_fids = array();
-    foreach ($files as $file) {
-      $gallery_fids[] = _media_gallery_get_media_fid($file);
-    }
-    // Construct a list of file IDs that is limited to the specified number of
-    // items and ordered by most recent; these are the files that will be
-    // displayed in the block.
-    $columns = !empty($node->media_gallery_block_columns[LANGUAGE_NONE][0]['value']) ? $node->media_gallery_block_columns[LANGUAGE_NONE][0]['value'] : 1;
-    $rows = !empty($node->media_gallery_block_rows[LANGUAGE_NONE][0]['value']) ? $node->media_gallery_block_rows[LANGUAGE_NONE][0]['value'] : 1;
-    $number_to_show = $columns * $rows;
-    $block_fids = db_select('file_managed', 'f')
-      ->fields('f', array('fid'))
-      ->condition('fid', $gallery_fids, 'IN')
-      ->orderBy('timestamp', 'DESC')
-      ->range(0, $number_to_show)
-      ->execute()
-      ->fetchCol();
-    // Before sorting, remove any items that will not display in the block.
-    $fid_order = array_flip($block_fids);
-    if ($number_to_show < count($files)) {
-      foreach ($files as $key => $file) {
-        if (!isset($fid_order[_media_gallery_get_media_fid($file)])) {
-          unset($files[$key]);
-        }
+
+  $gallery_fids = array();
+  foreach ($files as $file) {
+    $gallery_fids[] = _media_gallery_get_media_fid($file);
+  }
+  // Construct a list of file IDs that is limited to the specified number of
+  // items and ordered by most recent; these are the files that will be
+  // displayed in the block.
+  $columns = !empty($node->media_gallery_block_columns[LANGUAGE_NONE][0]['value']) ? $node->media_gallery_block_columns[LANGUAGE_NONE][0]['value'] : 1;
+  $rows = !empty($node->media_gallery_block_rows[LANGUAGE_NONE][0]['value']) ? $node->media_gallery_block_rows[LANGUAGE_NONE][0]['value'] : 1;
+  $number_to_show = $columns * $rows;
+  $block_fids = db_select('file_managed', 'f')
+    ->fields('f', array('fid'))
+    ->condition('fid', $gallery_fids, 'IN')
+    ->orderBy('timestamp', 'DESC')
+    ->range(0, $number_to_show)
+    ->execute()
+    ->fetchCol();
+  // Before sorting, remove any items that will not display in the block.
+  $fid_order = array_flip($block_fids);
+  if ($number_to_show < count($files)) {
+    foreach ($files as $key => $file) {
+      if (!isset($fid_order[_media_gallery_get_media_fid($file)])) {
+        unset($files[$key]);
       }
     }
-    // Prepare the sorting function with the list of file ID orders.
-    _media_gallery_sort_by_recent(NULL, NULL, $fid_order);
-    // Perform the sort.
-    usort($files, '_media_gallery_sort_by_recent');
-    // Display the block.
-    $block['subject'] = check_plain($node->title);
-    $block['content']['gallery'] = node_view($node, 'media_gallery_block');
-    // Move the node's contextual links so that they display on the block
-    // rather than the node (i.e., in the same dropdown as the "Configure
-    // block" link). This is also required in order to properly integrate with
-    // the code in media_gallery_contextual_links_view_alter().
-    if (isset($block['content']['gallery']['#contextual_links'])) {
-      $block['content']['#contextual_links'] = $block['content']['gallery']['#contextual_links'];
-      unset($block['content']['gallery']['#contextual_links']);
-    }
-    $block['content']['more_link'] = array(
-      '#theme' => 'more_link',
-      '#url' => 'node/' . $node->nid,
-      '#title' => t('Show the complete gallery'),
-      '#weight' => 1000,
-    );
   }
+  // Prepare the sorting function with the list of file ID orders.
+  _media_gallery_sort_by_recent(NULL, NULL, $fid_order);
+  // Perform the sort.
+  usort($files, '_media_gallery_sort_by_recent');
+  // Display the block.
+  $block['subject'] = check_plain($node->title);
+  $block['content']['gallery'] = node_view($node, 'media_gallery_block');
+  // Move the node's contextual links so that they display on the block
+  // rather than the node (i.e., in the same dropdown as the "Configure
+  // block" link). This is also required in order to properly integrate with
+  // the code in media_gallery_contextual_links_view_alter().
+  if (isset($block['content']['gallery']['#contextual_links'])) {
+    $block['content']['#contextual_links'] = $block['content']['gallery']['#contextual_links'];
+    unset($block['content']['gallery']['#contextual_links']);
+  }
+  $block['content']['more_link'] = array(
+    '#theme' => 'more_link',
+    '#url' => 'node/' . $node->nid,
+    '#title' => t('Show the complete gallery'),
+    '#weight' => 1000,
+  );
 
   return $block;
 }
@@ -694,9 +771,9 @@ function media_gallery_library() {
   $libraries['colorbox'] = array(
     'title' => 'Colorbox',
     'website' => 'http://colorpowered.com/colorbox/',
-    'version' => '1.3.9',
+    'version' => '1.3.25',
     'js' => array(
-      $colorbox_path . '/colorbox/jquery.colorbox-min.js' => array(),
+      $colorbox_path . '/jquery.colorbox-min.js' => array(),
     ),
     'css' => array(
       $colorbox_path . '/' . $stylesheet . '/colorbox.css' => array(
@@ -738,7 +815,7 @@ function _media_gallery_sort_by_recent($a, $b, $set_fid_order = NULL) {
 /**
  * Returns the number of files of each type attached to a media gallery node.
  */
-function media_gallery_get_media_type_count($node, $media_field = 'media_gallery_media') {
+function media_gallery_get_media_type_count($node, $media_field = 'media_gallery_file') {
   $fids = media_gallery_get_file_ids($node, $media_field);
   if (empty($fids)) {
     return array();
@@ -756,10 +833,10 @@ function media_gallery_get_media_type_count($node, $media_field = 'media_gallery
 /**
  * Returns all file IDs attached to a media gallery node.
  */
-function media_gallery_get_file_ids($node, $media_field = 'media_gallery_media') {
+function media_gallery_get_file_ids($node, $media_field = 'media_gallery_file') {
   $fids = array();
   $media_items = _media_gallery_field_get_items('node', $node, $media_field);
-  if( $media_items !== FALSE ) {
+  if ($media_items !== FALSE) {
     foreach ($media_items as $item) {
       $fids[] = _media_gallery_get_media_fid($item);
     }
@@ -768,17 +845,17 @@ function media_gallery_get_file_ids($node, $media_field = 'media_gallery_media')
 }
 
 /**
- * media_gallery_media_original is not a field and therefore cannot be used by field_get_items.
+ * media_gallery_file_original is not a field and therefore cannot be used by field_get_items.
  */
 function _media_gallery_field_get_items($entity_type, $entity, $field_name, $langcode = NULL) {
-  if ($entity_type == 'node' && $field_name == 'media_gallery_media_original') {
-    $media = $entity->media_gallery_media;
-    $entity->media_gallery_media = $entity->media_gallery_media_original;
-    $field_name = 'media_gallery_media';
+  if ($entity_type == 'node' && $field_name == 'media_gallery_file_original') {
+    $media = $entity->media_gallery_file;
+    $entity->media_gallery_file = $entity->media_gallery_file_original;
+    $field_name = 'media_gallery_file';
   }
   $items = field_get_items($entity_type, $entity, $field_name, $langcode);
   if (isset($media)) {
-    $entity->media_gallery_media = $media;
+    $entity->media_gallery_file = $media;
   }
   return $items;
 }
@@ -812,7 +889,7 @@ function _media_gallery_get_media_fid($file) {
  *   The updated gallery node object.
  */
 function media_gallery_remove_item_from_gallery($node, $file) {
-  $items = &$node->media_gallery_media[LANGUAGE_NONE];
+  $items = &$node->media_gallery_file[LANGUAGE_NONE];
   foreach ($items as $key => $item) {
     if ($file->fid == _media_gallery_get_media_fid($item)) {
       unset($items[$key]);
@@ -849,10 +926,12 @@ function media_gallery_form($node, $form_state) {
  * Implements hook_form_alter().
  */
 function media_gallery_form_alter(&$form, &$form_state, $form_id) {
-  if (strpos($form_id, 'media_edit') === 0) {
+  // $form_id = 'media_edit_*' by using multiple file editing
+  // $form_id = 'file_entity_edit' by using regular file edit
+  if (strpos($form_id, 'media_edit') === 0 || strpos($form_id, 'file_entity_edit')) {
     // Act on both the regular and multiform versions of the edit form.
-    if ($form_id === 'media_edit' || preg_match('/^media_edit_[0-9]+$/', $form_id)) {
-      // Prepopulate the media_edit form with our best guess at the image title.
+    if ($form_id === 'file_entity_edit' || preg_match('/^media_edit_[0-9]+$/', $form_id)) {
+      // Prepopulate the file_entity_edit form with our best guess at the image title.
       if (!empty($form['media_title']) && empty($form['media_title'][LANGUAGE_NONE][0]['value']['#default_value'])) {
         $fid = $form['fid']['#value'];
         $file = file_load($fid);
@@ -878,7 +957,7 @@ function media_gallery_form_media_gallery_node_form_alter(&$form, &$form_state) 
   _media_gallery_attach_form_resources($form);
 
   // The UI for the multi value media field and the node weight is elsewhere.
-  $form['media_gallery_media']['#access'] = FALSE;
+  $form['media_gallery_file']['#access'] = FALSE;
   $form['media_gallery_weight']['#access'] = FALSE;
 
   // Hiding this field because we only support a single collection at the moment.
@@ -907,7 +986,7 @@ function media_gallery_form_media_gallery_node_form_alter(&$form, &$form_state) 
   );
 
   // Move the items to the fieldset.
-  foreach($fieldset as $id => $subgroup) {
+  foreach ($fieldset as $id => $subgroup) {
     $form['settings_wrapper'][$subgroup][$id] = $form[$id];
     // locale_field_node_form_submit() looks for field language information in
     // a hard-coded part of $form.
@@ -934,7 +1013,7 @@ function media_gallery_form_media_gallery_node_form_alter(&$form, &$form_state) 
   );
 
   // Move the items to the fieldset.
-  foreach($fieldset as $id => $subgroup) {
+  foreach ($fieldset as $id => $subgroup) {
     $form[$subgroup][$id] = $form[$id];
     // locale_field_node_form_submit() looks for field language information in
     // a hard-coded part of $form.
@@ -975,8 +1054,8 @@ function media_gallery_form_media_gallery_node_form_alter(&$form, &$form_state) 
 /**
  * Implements hook_form_FORM_ID_alter().
  */
-function media_gallery_form_media_edit_alter(&$form, &$form_state) {
-  // Adjust the media edit form when it is shown within a gallery context.
+function media_gallery_form_file_entity_edit_alter(&$form, &$form_state) {
+  // Adjust the file entity edit form when it is shown within a gallery context.
   if (isset($form_state['media_gallery']['gallery'])) {
     // Remove the Delete button, since media entities can't be deleted when they
     // are in use.
@@ -992,9 +1071,9 @@ function media_gallery_form_media_edit_alter(&$form, &$form_state) {
     // Make sure to add this for the form-level submit handlers and also for the
     // button-level submit handlers of the "Save" button, in case those are
     // being used.
-    $form['#submit'][] = 'media_gallery_media_edit_submit';
+    $form['#submit'][] = 'media_gallery_file_entity_edit_submit';
     if (isset($form['actions']['submit']['#submit'])) {
-      $form['actions']['submit']['#submit'][] = 'media_gallery_media_edit_submit';
+      $form['actions']['submit']['#submit'][] = 'media_gallery_file_entity_edit_submit';
     }
   }
   // On the media gallery multiedit page, add a "Remove" checkbox to each item.
@@ -1018,7 +1097,7 @@ function _media_gallery_add_remove_checkbox(&$form, &$form_state, $node) {
   $form['remove'] = array(
     '#type' => 'checkbox',
     '#title' => t('Remove from gallery'),
-    '#description' => t('The original file remains in your <a href="@library">media library</a>.', array('@library' => url('admin/content/media'))),
+    '#description' => t('The original file remains in your <a href="@library">media library</a>.', array('@library' => url('admin/content/file'))),
     '#access' => node_access('update', $node),
   );
 
@@ -1051,12 +1130,12 @@ function media_gallery_multiedit_remove_item($form, &$form_state) {
 }
 
 /**
- * Form submit handler for media entity edit form in gallery context.
+ * Form submit handler for file_entity edit form in gallery context.
  *
- * @see media_gallery_form_media_edit_alter()
+ * @see media_gallery_form_file_entity_edit_alter()
  */
-function media_gallery_media_edit_submit($form, &$form_state) {
-  $form_state['redirect'] = 'media-gallery/detail/' .  $form_state['media_gallery']['gallery']->nid . '/' . $form_state['values']['fid'];
+function media_gallery_file_entity_edit_submit($form, &$form_state) {
+  $form_state['redirect'] = 'media-gallery/detail/' . $form_state['media_gallery']['gallery']->nid . '/' . $form_state['values']['fid'];
 }
 
 /**
@@ -1096,7 +1175,7 @@ function _media_gallery_attach_css_resources(&$element) {
 }
 
 /**
- * Helper function to attach JS for media galleries to 
+ * Helper function to attach JS for media galleries to
  */
 function _media_gallery_attach_edit_resources(&$element) {
   $path = drupal_get_path('module', 'media_gallery');
@@ -1123,12 +1202,12 @@ function media_gallery_node_view_alter(&$build) {
   }
   // This is for when a gallery is being shown on its own, single gallery page.
   elseif ($build['#bundle'] == 'media_gallery' && $build['#view_mode'] == 'full') {
-    if (!empty($build['media_gallery_media'])) {
-      foreach (element_children($build['media_gallery_media']) as $delta) {
+    if (!empty($build['media_gallery_file'])) {
+      foreach (element_children($build['media_gallery_file']) as $delta) {
         // For each media item, add contextual links to the in-gallery-context
         // tasks that can be performed on a media item.
-        $fid = $build['media_gallery_media'][$delta]['#file']->fid;
-        $build['media_gallery_media'][$delta]['#contextual_links']['media_gallery'] = array('media-gallery/detail', array($build['#node']->nid, $fid));
+        $fid = $build['media_gallery_file'][$delta]['#file']->fid;
+        $build['media_gallery_file'][$delta]['#contextual_links']['media_gallery'] = array('media-gallery/detail', array($build['#node']->nid, $fid));
       }
     }
     _media_gallery_attach_css_resources($build);
@@ -1200,20 +1279,31 @@ function media_gallery_contextual_links_view_alter(&$element, $items) {
       }
     }
   }
+  // Remove 'Edit' button provided by File Entity.
+  if (isset($element['#links']['media-gallery-edit']) && isset($element['#links']['file-edit'])) {
+    unset($element['#links']['file-edit']);
+  }
+  // Move 'Delete' button to the bottom of the list and modify label.
+  if (isset($element['#links']['media-gallery-edit']) && isset($element['#links']['file-delete'])) {
+    $delete = $element['#links']['file-delete'];
+    unset($element['#links']['file-delete']);
+    $element['#links']['file-delete'] = $delete;
+    $element['#links']['file-delete']['title'] = 'Delete file';
+  }
 }
 
 /**
  * Preprocess function for theme_field().
  */
 function media_gallery_preprocess_field(&$variables, $hook) {
-  if ($variables['element']['#field_name'] === 'media_gallery_media') {
+  if ($variables['element']['#field_name'] === 'media_gallery_file') {
     $columns = 1;
-    switch($variables['element']['#view_mode']) {
+    switch ($variables['element']['#view_mode']) {
       case 'media_gallery_block':
-        $columns = $variables['element']['#object']->media_gallery_block_columns['und'][0]['value'];
+        $columns = $variables['element']['#object']->media_gallery_block_columns[LANGUAGE_NONE][0]['value'];
         break;
       case 'full':
-        $columns = $variables['element']['#object']->media_gallery_columns['und'][0]['value'];
+        $columns = $variables['element']['#object']->media_gallery_columns[LANGUAGE_NONE][0]['value'];
         $media_gallery_view_mode_css = 'media-gallery-view-full';
         break;
     }
@@ -1225,7 +1315,6 @@ function media_gallery_preprocess_field(&$variables, $hook) {
     }
     foreach ($variables['items'] as $delta => $item) {
       $variables['item_attributes_array'][$delta] = array('id' => 'media-gallery-media-' . $delta);
-
     }
   }
 }
@@ -1298,7 +1387,7 @@ function media_gallery_form_taxonomy_form_term_alter(&$form, &$form_state) {
   );
 
   // Move the items to the fieldset.
-  foreach($fieldset as $id => $subgroup) {
+  foreach ($fieldset as $id => $subgroup) {
     $form['settings_wrapper'][$subgroup][$id] = $form[$id];
     unset($form[$id]);
   }
@@ -1356,7 +1445,7 @@ function media_gallery_module_implements_alter(&$implementations, $hook) {
     // control, this can be changed.
     //case 'form_taxonomy_form_term_alter':
     case 'form_alter':
-      if (!isset($implementations['media_gallery'])){
+      if (!isset($implementations['media_gallery'])) {
         break;
       }
       $group = $implementations['media_gallery'];
@@ -1383,7 +1472,7 @@ function media_gallery_get_default_gallery_collection() {
   $tid = db_select('taxonomy_term_data', 'ttd')
     ->fields('ttd', array('tid'))
     ->condition('vid', $gallery_collection_vid)
-    ->range(0,1)
+    ->range(0, 1)
     ->execute()
     ->fetchField();
 
@@ -1421,11 +1510,16 @@ function media_gallery_edit_access($node) {
  * galleries.
  */
 function media_gallery_multiedit_access($node) {
-  if (media_gallery_edit_access($node) && media_access('edit')) {
-    $media_items = field_get_items('node', $node, 'media_gallery_media');
-    if( $media_items !== FALSE && count($media_items) > 0 ) {
-      return TRUE;
-    }
+  if (!media_gallery_edit_access($node) )
+    return;
+
+  $media_items = field_get_items('node', $node, 'media_gallery_file');
+  if ($media_items === FALSE)
+    return;
+
+  $media_items = media_gallery_filter_media_access($media_items, 'update');
+  if (count($media_items) > 0) {
+    return TRUE;
   }
 }
 
@@ -1442,7 +1536,7 @@ function media_gallery_multiedit_access($node) {
  */
 function media_gallery_view_item_access($node, $file) {
   // Only grant access if the user can view the gallery and the provided media.
-  return media_gallery_view_access($node) && media_access('view')
+  return media_gallery_view_access($node) && file_entity_access('view', $file)
     && in_array($file->fid, media_gallery_get_file_ids($node));
 }
 
@@ -1452,7 +1546,7 @@ function media_gallery_view_item_access($node, $file) {
  * @param $node
  *   The gallery node object.
  * @param $file
- *   The file to view.
+ *   The file to edit.
  *
  * @return
  *   TRUE if access is granted; FALSE otherwise.
@@ -1460,7 +1554,7 @@ function media_gallery_view_item_access($node, $file) {
 function media_gallery_edit_item_access($node, $file) {
   // Only grant access if the user can edit the provided media
   // and the media is part of the gallery.
-  return media_access('edit')
+  return file_entity_access('update', $file)
     && in_array($file->fid, media_gallery_get_file_ids($node));
 }
 
@@ -1782,4 +1876,30 @@ function media_gallery_lightbox_delivery_callback($page_content) {
     module_load_include('inc', 'media_gallery', 'media_gallery.pages');
   }
   media_gallery_lightbox_page_deliver($page_content);
+}
+
+/**
+ * Returns all given media_files, on which the user has the right
+ * of the given operation.
+ *
+ * @param $media_files
+ *   The files to perform the access check.
+ * @param $operation
+ *   A access operation (for example: 'view', 'update', 'delete', 'create').
+ *
+ * @return
+ *   An array of files.
+ */
+function media_gallery_filter_media_access($media_files, $operation) {
+  $media_accessable = array();
+
+  if (empty($media_files))
+    return $media_accessable;
+
+  foreach ($media_files as $key => $media) {
+    if (file_entity_access($operation, (object)$media)) {
+      $media_accessable[$key] = $media;
+    }
+  }
+  return $media_accessable;
 }

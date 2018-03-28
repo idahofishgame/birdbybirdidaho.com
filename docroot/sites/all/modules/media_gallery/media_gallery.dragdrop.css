@@ -47,6 +47,6 @@
 
 /* Don't gray out images while drag-and-drop is disabled; webkit doesn't seem
    to handle the opacity change correctly. */
-.field-name-media-gallery-media .media-gallery-sortable-processed.ui-state-disabled {
+.field-name-media-gallery-file .media-gallery-sortable-processed.ui-state-disabled {
   opacity: inherit;
 }

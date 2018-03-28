@@ -3,13 +3,14 @@
 Drupal.behaviors.media_gallery = {};
 Drupal.behaviors.media_gallery.attach = function (context, settings) {
   // Bind a click handler to the 'add media' link.
-  $('a.media-gallery-add.launcher').once('media-gallery-add-processed').bind('click', Drupal.media_gallery.open_browser);
+  $('a.media-gallery-add.launcher').once('media-gallery-add').bind('click', Drupal.media_gallery.open_browser);
 };
 
 Drupal.media_gallery = {};
 
 Drupal.media_gallery.open_browser = function (event) {
   event.preventDefault();
+  event.stopPropagation();
   var pluginOptions = { 'id': 'media_gallery', 'multiselect' : true , 'types': Drupal.settings.mediaGalleryAllowedMediaTypes};
   Drupal.media.popups.mediaBrowser(Drupal.media_gallery.add_media, pluginOptions);
 };

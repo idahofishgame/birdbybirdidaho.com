@@ -1,6 +1,11 @@
 <?php
 
 /**
+ * @file
+ * Common pages for the Media Gallery module.
+ */
+
+/**
  * Page callback to list all galleries.
  *
  * TODO: When I grow up I want to be a View.
@@ -11,7 +16,7 @@ function media_gallery_list_galleries($term) {
     module_load_include('inc', 'taxonomy', 'taxonomy.pages');
     return taxonomy_term_page($term);
   }
-  
+
   // Add front-end resources for drag-and-drop sorting.
   if (user_access('administer media galleries')) {
     drupal_add_library('system', 'ui.sortable');
@@ -21,6 +26,9 @@ function media_gallery_list_galleries($term) {
     $sort_collection_url = url('media-gallery/sort/collection/' . $term->tid . '/' . drupal_get_token('media_gallery'));
     drupal_add_js(array('mediaGallerySortCollectionUrl' => $sort_collection_url), array('type' => 'setting'));
   }
+  // Assign the term name as the page title.
+  drupal_set_title($term->name);
+
   // Build breadcrumb based on the hierarchy of the term.
   $current = (object) array(
     'tid' => $term->tid,
@@ -57,7 +65,7 @@ function media_gallery_list_galleries($term) {
     $build['pager'] = array(
       '#theme' => 'pager',
       '#weight' => 10,
-     );
+    );
     $build['#term'] = $term;
     $build['#theme'] = 'media_gallery_collection';
   }
@@ -136,7 +144,8 @@ function media_gallery_lightbox_page_deliver($page_content) {
   // iframe results in reduced functionality (you don't get the colorbox
   // plugin's autoresizing behavior).
   print drupal_render($content);
-  drupal_exit();
+  // Perform end-of-request tasks.
+  drupal_page_footer();
 }
 
 /**
@@ -155,7 +164,16 @@ function media_gallery_ajax_sort($type, $item) {
   $id_prefix = '';
   switch ($type) {
     case 'collection':
-      $id_prefix = 'node-';
+      // There are some themes, which set a specific html-prefix for the node
+      // id. Parse the id to be compatible with all themes.
+      // @see drupal_html_id()
+      $search = empty($order[0]) ? '' : $order[0];
+      if (preg_match('/^([A-Za-z0-9\-_]+?-)[0-9]+(--[0-9]+)?$/', $search, $match)) {
+        $id_prefix = $match[1];
+      }
+      else {
+        $id_prefix = 'node-';
+      }
       $order = _media_gallery_sanitize_ids($id_prefix, $order);
       $result = media_gallery_reorder_collection($item, $order);
       break;
@@ -218,16 +236,16 @@ function media_gallery_reorder_collection($collection, $order) {
  * Reorder the media items in a gallery.
  */
 function media_gallery_reorder_gallery($gallery, $order) {
-  $media_field = $gallery->media_gallery_media[LANGUAGE_NONE];
+  $media_field = $gallery->media_gallery_file[LANGUAGE_NONE];
   $offset = 0;
   if (!empty($_POST['page'])) {
     $page = array_pop(explode(',', $_POST['page']));
     $num_per_page = $gallery->media_gallery_columns[LANGUAGE_NONE][0]['value'] * $gallery->media_gallery_rows[LANGUAGE_NONE][0]['value'];
     $offset = $num_per_page * $page;
   }
-  
+
   foreach ($order as $new_delta => $old_delta) {
-    $gallery->media_gallery_media[LANGUAGE_NONE][$new_delta + $offset] = $media_field[$old_delta + $offset];
+    $gallery->media_gallery_file[LANGUAGE_NONE][$new_delta + $offset] = $media_field[$old_delta + $offset];
   }
   node_save($gallery);
   return TRUE;
@@ -271,7 +289,7 @@ function media_gallery_add_images($node) {
   $fids = $_POST['files'];
 
   // Determine which file ids are already included in this gallery.
-  $items = isset($node->media_gallery_media[LANGUAGE_NONE]) ? $node->media_gallery_media[LANGUAGE_NONE] : array();
+  $items = isset($node->media_gallery_file[LANGUAGE_NONE]) ? $node->media_gallery_file[LANGUAGE_NONE] : array();
   foreach ($items as $item) {
     $existing_fids[$item['fid']] = TRUE;
   }
@@ -280,15 +298,15 @@ function media_gallery_add_images($node) {
   foreach ($fids as $fid) {
     // Only add a selected item if it isn't already in the gallery.
     if (empty($existing_fids[$fid])) {
-      $file = Array();
+      $file = array();
       $file['fid'] = $fid;
-      $file['title'] = null;
-      $file['data'] = '';
+      $file['display'] = 1;
+      $file['description'] = '';
       $items[] = $file;
     }
   }
 
-  $node->media_gallery_media[LANGUAGE_NONE] = $items;
+  $node->media_gallery_file[LANGUAGE_NONE] = $items;
   node_save($node);
 
   drupal_json_output(array('result' => TRUE, 'items' => $items));
@@ -321,7 +339,7 @@ function media_gallery_remove_item_form($form, &$form_state, $node, $file) {
   return confirm_form($form,
     t('Are you sure you want to remove %file from the gallery %gallery?', array('%file' => $file->filename, '%gallery' => $node->title)),
     "media-gallery/detail/{$node->nid}/{$file->fid}",
-    t('The file will still be available in the media library to use elsewhere on this site.'),
+    t('The file will still be available in the media library if used elsewhere on this site. Note: Unused files will be deleted.'),
     t('Remove file')
   );
 }
@@ -352,12 +370,13 @@ function media_gallery_media_page_edit($gallery, $file) {
     l($gallery->title, $node_url_arguments['path'], $node_url_arguments['options']),
   ));
 
-  // We'll be reusing Media module's 'media_edit' form, so we need to load its
-  // include file. In addition to loading it here, we also set the include file
-  // info within $form_state in case there are AJAX enabled widgets that will
-  // submit to system/ajax, bypassing this menu callback.
-  module_load_include('inc', 'media', 'includes/media.pages');
-  $form_state['build_info']['files']['menu'] = array('type' => 'inc', 'module' => 'media', 'name' => 'media.pages');
+  // We'll be reusing File entity (fieldable files) module's 'file_entity_edit'
+  // form, so we need to load its include file. In addition to loading it here,
+  // we also set the include file info within $form_state in case there are
+  // AJAX enabled widgets that will submit to system/ajax, bypassing this menu
+  // callback.
+  module_load_include('inc', 'file_entity', 'file_entity.pages');
+  $form_state['build_info']['files']['menu'] = array('type' => 'inc', 'module' => 'file_entity', 'name' => 'file_entity.pages');
 
   // Provide context information for form building and processing functions.
   $form_state['media_gallery']['gallery'] = $gallery;
@@ -365,7 +384,7 @@ function media_gallery_media_page_edit($gallery, $file) {
   // Since we have a $form_state, we can't call drupal_get_form(), so pass the
   // expected arguments to drupal_build_form().
   $form_state['build_info']['args'] = array($file);
-  return drupal_build_form('media_edit', $form_state);
+  return drupal_build_form('file_entity_edit', $form_state);
 }
 
 /**
@@ -377,12 +396,13 @@ function media_gallery_media_page_multiedit($node) {
   $rows = $node->media_gallery_rows[LANGUAGE_NONE][0]['value'];
   $number_per_page = $columns * $rows;
   $current_page = isset($_GET['page']) ? $_GET['page'] : 0;
-  $items = array_slice($node->media_gallery_media[LANGUAGE_NONE], $current_page*$number_per_page, $number_per_page);
+  $items = array_slice($node->media_gallery_file[LANGUAGE_NONE], $current_page*$number_per_page, $number_per_page);
   $fids = array();
   foreach ($items as $item) {
     $fids[] = $item['fid'];
   }
   $files = file_load_multiple($fids);
+  $files = media_gallery_filter_media_access($files, 'update');
 
   // Load the Media module include file containing the form callback.
   // @todo To support AJAX enabled widgets within the form, we need to also add
@@ -391,9 +411,9 @@ function media_gallery_media_page_multiedit($node) {
   module_load_include('inc', 'media', 'includes/media.pages');
 
   // Build and process the form.
-  $form = media_page_multiedit($files);
+  $form = media_bulk_upload_file_operation_edit_multiple($files);
 
-  // Override the page title set by media_page_multiedit() and return the form.
+  // Override the page title set by media_file_page_edit_multiple() and return the form.
   drupal_set_title(t('<em>Edit media for</em> @title', array('@type' => $node->type, '@title' => $node->title)), PASS_THROUGH);
   return $form;
 }

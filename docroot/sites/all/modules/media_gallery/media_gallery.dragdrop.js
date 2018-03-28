@@ -69,7 +69,7 @@ Drupal.mediaGallerySort.handle_update = function (event, ui) {
   /**
    * Change ID attributes of sorted items to reflect the new order.
    *
-   * Individual media items in the media_gallery_media field don't have a primary
+   * Individual media items in the media_gallery_file field don't have a primary
    * key, so we're sorting by their delta. When their delta changes on the server
    * side, we need to reflect it on the client side as well.
    */
