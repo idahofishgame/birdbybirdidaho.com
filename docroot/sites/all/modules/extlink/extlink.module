@@ -6,6 +6,18 @@
  */
 
 /**
+ * Implements hook_help().
+ */
+function extlink_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#extlink':
+      $output = '';
+      $output .= '<p>' . t('External Links is used to differentiate between internal and external links. Using jQuery, it will find all external links on a page and add an external icon indicating it will take you offsite or a mail icon for mailto links.') . '</p>';
+      return $output;
+  }
+}
+
+/**
  * Implements hook_menu().
  */
 function extlink_menu() {
